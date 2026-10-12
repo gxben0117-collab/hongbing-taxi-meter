@@ -67,6 +67,11 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .surcharge .tag{color:var(--amber)}
 
 /* 按鈕 */
+.passenger{display:flex;align-items:center;gap:8px;margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:6px 6px 6px 12px}
+.passenger label{font-size:13px;color:var(--muted);letter-spacing:.1em;flex:none}
+.passenger input{flex:1;min-width:0;background:transparent;border:0;color:var(--fg);font-size:18px;font-weight:700;font-family:inherit;padding:8px 4px}
+.passenger input::placeholder{color:#6b5d52;font-weight:400;font-size:15px}
+.passenger .suffix{color:var(--amber);font-size:14px;font-weight:700;flex:none;padding-right:6px}
 .controls{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
 .btn{border:0;border-radius:12px;padding:16px 10px;font-size:18px;font-weight:900;letter-spacing:.12em;color:var(--fg);background:var(--panel-2);border:1px solid var(--line)}
 .btn:active{transform:translateY(1px)}
@@ -130,7 +135,7 @@ details[open].card summary::after{content:"－"}
 .overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:grid;place-items:center;padding:16px;z-index:1000}
 .receipt{background:#f4efe6;color:#1d1915;width:100%;max-width:360px;border-radius:6px;padding:20px 18px;font-family:var(--font-mono);box-shadow:0 20px 50px rgba(0,0,0,.6);max-height:90vh;overflow:auto}
 .receipt h3{font-family:var(--font-body);text-align:center;margin:0 0 2px;font-size:20px;font-weight:900;letter-spacing:.2em}
-.receipt .sub{text-align:center;font-size:12px;color:#6b6157;margin-bottom:12px;font-family:var(--font-body)}
+.receipt .sub{white-space:pre-line;text-align:center;font-size:12px;color:#6b6157;margin-bottom:12px;font-family:var(--font-body)}
 .receipt table{width:100%;border-collapse:collapse;font-size:14px}
 .receipt td{padding:4px 0;border-bottom:1px dashed #c9bfb2}
 .receipt td:last-child{text-align:right}
@@ -177,6 +182,12 @@ details[open].card summary::after{content:"－"}
   </div>
 </section>
 
+<div class="passenger">
+  <label for="pName">乘客</label>
+  <input id="pName" list="pRecent" maxlength="12" placeholder="輸入名字，播報會稱呼他" autocomplete="off" enterkeyhint="done">
+  <span class="suffix" id="pSuffix">貴賓</span>
+</div>
+<datalist id="pRecent"></datalist>
 <div class="controls">
   <button class="btn go" id="btnStart">開始計費</button>
   <button class="btn" id="btnPause" hidden>暫停</button>
@@ -306,7 +317,7 @@ const store = {
 let S = {...DEFAULT_SETTINGS, ...store.get("hb_settings", {})};
 
 /* ---------- 行程狀態 ---------- */
-const emptyTrip = () => ({state:"idle", startedAt:0, elapsed:0, lastTick:0, dist:0, wait:0, night:false, lastFare:0, lastVoiceFare:0, path:[]});
+const emptyTrip = () => ({state:"idle", startedAt:0, elapsed:0, lastTick:0, dist:0, wait:0, night:false, lastFare:0, lastVoiceFare:0, voiceCount:0, passenger:"", path:[]});
 let T = {...emptyTrip(), ...store.get("hb_trip", {})};
 if (T.state === "running") T.lastTick = Date.now(); // 重新整理後接續
 const saveTrip = () => store.set("hb_trip", {...T, path: T.path.slice(-400)});
@@ -433,13 +444,23 @@ function say(text, {force=false, interrupt=false}={}){
   u.rate = S.rate; u.pitch = S.pitch;
   synth.speak(u);
 }
+/* ---------- 乘客稱呼 ---------- */
+const HONOR = /(先生|小姐|女士|貴賓|老闆|董|總|經理|大哥|大姐|哥|姐|弟|妹|阿姨|叔叔|伯|老師|醫師|同學)$/;
+const passengerName = () => ((T.state!=="idle" ? T.passenger : $("pName").value.trim()) || "").replace(/\s+/g," ");
+const hon = n => n ? (HONOR.test(n) ? n : n+"貴賓") : "";
+function updateSuffix(){ const n=$("pName").value.trim(); $("pSuffix").hidden = !n || HONOR.test(n); }
+let recentNames = store.get("hb_recent", []);
+function renderRecent(){ $("pRecent").innerHTML = recentNames.map(n=>`<option value="${escapeHtml(n)}"></option>`).join(""); }
+function rememberName(n){ if (!n) return; recentNames = [n, ...recentNames.filter(x=>x!==n)].slice(0,8); store.set("hb_recent", recentNames); renderRecent(); }
+$("pName").oninput = () => { updateSuffix(); if (T.state!=="idle"){ T.passenger = $("pName").value.trim(); saveTrip(); } };
+
 function setVoiceBtn(){
   $("btnVoice").textContent = S.voice ? "🔊 語音開" : "🔇 語音關";
   $("btnVoice").classList.toggle("on", S.voice);
   $("btnVoice").setAttribute("aria-pressed", String(S.voice));
 }
 $("btnVoice").onclick = () => { S.voice = !S.voice; store.set("hb_settings", S); setVoiceBtn(); if (S.voice) say("語音播報已開啟"); else synth && synth.cancel(); };
-$("btnTest").onclick = () => say(`歡迎搭乘紅兵計程車，目前車資 ${Math.round(calc(T.dist,T.wait,T.night).total)} 元`, {force:true, interrupt:true});
+$("btnTest").onclick = () => say(`${passengerName() ? "歡迎"+hon(passengerName())+"，" : "歡迎"}搭乘紅兵計程車，目前車資 ${Math.round(calc(T.dist,T.wait,T.night).total)} 元`, {force:true, interrupt:true});
 if (!synth) { $("btnTest").disabled = true; $("btnVoice").disabled = true; }
 
 /* ---------- 跳表音 ---------- */
@@ -476,7 +497,9 @@ function render(){
     T.lastFare = f.total;
     if (S.voiceStep>0 && f.total - T.lastVoiceFare >= S.voiceStep){
       T.lastVoiceFare = Math.floor(f.total / S.voiceStep) * S.voiceStep;
-      if (!navActive) say(`目前車資 ${f.total} 元`);
+      T.voiceCount = (T.voiceCount||0) + 1;
+      const n = hon(T.passenger);
+      if (!navActive) say(n && T.voiceCount % 2 === 1 ? `${n}，目前車資 ${f.total} 元` : `目前車資 ${f.total} 元`);
     }
   }
   $("sDist").textContent = (T.dist/1000).toFixed(2);
@@ -593,25 +616,26 @@ let simIdx = 0;
 /* ---------- 按鈕 ---------- */
 $("btnStart").onclick = () => {
   if (!pos && !S.sim) toast("還沒抓到定位，先開始計時，定位到了就會累計里程");
-  T = {...emptyTrip(), state:"running", startedAt:Date.now(), lastTick:Date.now(), night:isNight()};
+  T = {...emptyTrip(), state:"running", startedAt:Date.now(), lastTick:Date.now(), night:isNight(), passenger:$("pName").value.trim()};
+  rememberName(T.passenger);
   T.lastFare = calc(0,0,T.night).total;
   T.lastVoiceFare = Math.floor(T.lastFare / Math.max(1,S.voiceStep)) * Math.max(1,S.voiceStep);
   lastAccepted = pos;
   trail.setLatLngs(pos ? [[pos.lat,pos.lng]] : []);
   saveTrip(); keepAwake(true);
-  say(`歡迎搭乘紅兵計程車，開始計費，起跳 ${T.lastFare} 元${T.night && S.night ? "，含夜間加成" : ""}。請繫好安全帶。`, {interrupt:true});
+  say(`${T.passenger ? "歡迎"+hon(T.passenger)+"乘坐紅兵計程車" : "歡迎搭乘紅兵計程車"}，開始計費，起跳 ${T.lastFare} 元${T.night && S.night ? "，含夜間加成" : ""}。請繫好安全帶。`, {interrupt:true});
   render();
 };
 $("btnPause").onclick = () => {
-  if (T.state==="running"){ T.state="paused"; say("計費暫停"); }
-  else { T.state="running"; T.lastTick=Date.now(); lastAccepted=pos; say("繼續計費"); }
+  if (T.state==="running"){ T.state="paused"; say(T.passenger ? `${hon(T.passenger)}，計費暫停，請稍候` : "計費暫停"); }
+  else { T.state="running"; T.lastTick=Date.now(); lastAccepted=pos; say(T.passenger ? `${hon(T.passenger)}，我們繼續出發` : "繼續計費"); }
   saveTrip(); render();
 };
 $("btnEnd").onclick = () => {
   const f = calc(T.dist, T.wait, T.night);
   T.state = "ended"; saveTrip();
   const start = new Date(T.startedAt);
-  $("rcSub").textContent = `${start.toLocaleDateString("zh-TW")} ${start.toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit"})} 上車 · ${S.name||"自訂費率"}`;
+  $("rcSub").textContent = `${start.toLocaleDateString("zh-TW")} ${start.toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit"})} 上車 · ${S.name||"自訂費率"}${T.passenger ? "\n乘客："+hon(T.passenger) : ""}`;
   const rows = [
     ["起跳（"+(S.baseDist/1000)+" km）", S.base],
     [`里程續跳 ×${f.distJumps}`, f.distJumps*S.stepFare],
@@ -623,10 +647,12 @@ $("btnEnd").onclick = () => {
   $("rcTotal").textContent = `NT$ ${f.total}`;
   $("receipt").hidden = false;
   stopNav(false);
-  say(`已到達，本次車資 ${f.total} 元，謝謝搭乘紅兵計程車，請記得隨身物品。`, {interrupt:true});
+  say(T.passenger
+    ? `親愛的${hon(T.passenger)}，已到達目的地，本次總計 ${f.total} 元。謝謝您乘坐紅兵計程車，請記得隨身物品，祝您有美好的一天。`
+    : `已到達，本次車資 ${f.total} 元，謝謝搭乘紅兵計程車，請記得隨身物品。`, {interrupt:true});
   keepAwake(false);
 };
-$("rcClose").onclick = () => { $("receipt").hidden = true; T = emptyTrip(); store.del("hb_trip"); trail.setLatLngs([]); render(); };
+$("rcClose").onclick = () => { $("receipt").hidden = true; T = emptyTrip(); $("pName").value = ""; updateSuffix(); store.del("hb_trip"); trail.setLatLngs([]); render(); };
 
 /* ---------- 地圖 ---------- */
 const map = L.map("map", {zoomControl:true, attributionControl:true}).setView([25.0478,121.5170], 15);
@@ -830,7 +856,7 @@ function navTick(){
   $("turnText").textContent = stepText(s);
   $("turnArrow").textContent = s.type==="arrive" ? "⚑" : (ARROW[s.mod] || "↑");
   if (s.type==="arrive" && d < 40){
-    say(`已抵達目的地附近${T.state==="running" ? "，目前車資 "+calc(T.dist,T.wait,T.night).total+" 元" : ""}`, {interrupt:true});
+    say(`${T.passenger ? hon(T.passenger)+"，" : ""}已抵達目的地附近${T.state==="running" ? "，目前車資 "+calc(T.dist,T.wait,T.night).total+" 元" : ""}`, {interrupt:true});
     stopNav(false); return;
   }
   // 依距離提前播報：500m、150m、即將
@@ -855,7 +881,7 @@ function startNav(){
   navActive = true; follow = true; keepAwake(true);
   $("btnNav").textContent = "停止導航"; $("btnNav").classList.add("on");
   const first = route.steps[1];
-  say(`開始導航，前往${dest.name}，全程約 ${(route.distance/1000).toFixed(1)} 公里。${first ? "請沿路線行駛，"+fmtDist(haversine(pos||first, first))+"後，"+stepText(first) : ""}`, {interrupt:true});
+  say(`${passengerName() ? hon(passengerName())+"，我們出發，" : "開始導航，"}前往${dest.name}，全程約 ${(route.distance/1000).toFixed(1)} 公里。${first ? "請沿路線行駛，"+fmtDist(haversine(pos||first, first))+"後，"+stepText(first) : ""}`, {interrupt:true});
   if (pos) map.setView([pos.lat,pos.lng], 17);
   navTick();
 }
@@ -910,7 +936,9 @@ let toastTimer;
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.hidden=true, 3500); }
 
 /* ---------- 啟動 ---------- */
-fillForm(); setVoiceBtn(); renderFavs();
+fillForm(); setVoiceBtn(); renderFavs(); renderRecent();
+if (T.passenger) $("pName").value = T.passenger;
+updateSuffix();
 if (T.state==="ended") { T = emptyTrip(); store.del("hb_trip"); }
 if (T.state==="running") keepAwake(true);
 startGps();
