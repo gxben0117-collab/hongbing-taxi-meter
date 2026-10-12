@@ -1,0 +1,921 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#0b0a09">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>紅兵計程車計費表</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=Share+Tech+Mono&display=swap">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* 版面：上方紅色車頂燈＋LED 計費表面板，下方地圖導航，全部單欄、拇指可按 */
+:root{
+  --bg:#0b0a09;         /* 儀表板黑 */
+  --panel:#161311;      /* 面板 */
+  --panel-2:#1f1a17;
+  --line:#3a2f29;
+  --fg:#efe6dc;
+  --muted:#9a8a7d;
+  --red:#ff2b1c;        /* LED 紅 */
+  --red-dim:#3a0f0b;    /* LED 未亮段 */
+  --amber:#ffb627;      /* 車頂燈琥珀 */
+  --green:#3ddc84;
+  --font-body:"Noto Sans TC",system-ui,-apple-system,"PingFang TC","Microsoft JhengHei",sans-serif;
+  --font-mono:"Share Tech Mono",ui-monospace,Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-body);-webkit-tap-highlight-color:transparent}
+body{padding:calc(env(safe-area-inset-top,0px) + 10px) 16px calc(env(safe-area-inset-bottom,0px) + 24px);max-width:560px;margin:0 auto}
+button{font-family:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+[hidden]{display:none!important}
+
+/* 頂部：品牌＋車頂燈 */
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.stamp{width:42px;height:42px;border:2.5px solid var(--red);border-radius:8px;display:grid;place-items:center;color:var(--red);font-weight:900;font-size:13px;line-height:1.05;text-align:center;transform:rotate(-6deg);flex:none}
+.brand h1{margin:0;font-size:19px;font-weight:900;letter-spacing:.06em;white-space:nowrap}
+.brand small{display:block;color:var(--muted);font-size:11px;letter-spacing:.12em;font-weight:500}
+.roof{flex:none;padding:6px 12px;border-radius:6px;font-weight:900;font-size:16px;letter-spacing:.2em;border:2px solid var(--red);color:var(--red);background:#2a0a07;text-shadow:0 0 8px rgba(255,43,28,.8);box-shadow:0 0 14px rgba(255,43,28,.35) inset}
+.roof.busy{border-color:var(--line);color:#5a4a40;background:var(--panel);text-shadow:none;box-shadow:none}
+
+/* 計費表本體 */
+.meter{background:linear-gradient(180deg,#1a1513,#100d0c);border:1px solid var(--line);border-radius:16px;padding:14px 14px 12px;box-shadow:0 10px 30px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.04) inset}
+.meter-head{display:flex;justify-content:space-between;align-items:center;font-size:11px;color:var(--muted);letter-spacing:.14em;margin-bottom:6px}
+.gps{display:flex;align-items:center;gap:6px}
+.dot{width:8px;height:8px;border-radius:50%;background:#555}
+.dot.ok{background:var(--green);box-shadow:0 0 6px var(--green)}
+.dot.warn{background:var(--amber)}
+.dot.bad{background:var(--red)}
+.screen{background:#070505;border-radius:10px;padding:12px 10px 8px;border:1px solid #2b201b;box-shadow:0 0 0 3px #0d0a09 inset}
+.fare-row{display:flex;align-items:flex-end;justify-content:flex-end;gap:8px}
+.fare-label{color:var(--red);opacity:.8;font-size:13px;font-weight:700;writing-mode:vertical-rl;letter-spacing:.3em;margin-right:auto;align-self:center}
+#fareDigits{height:96px;width:auto;max-width:78%}
+.yuan{color:var(--red);font-weight:900;font-size:20px;margin-bottom:6px;text-shadow:0 0 6px rgba(255,43,28,.6)}
+.jump{animation:jump .35s ease-out}
+@keyframes jump{0%{filter:brightness(2.2)}100%{filter:none}}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:10px}
+.stat{background:var(--panel-2);border-radius:8px;padding:7px 6px;text-align:center;min-width:0}
+.stat b{display:block;font-family:var(--font-mono);font-size:19px;color:var(--amber);font-weight:400;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.stat span{font-size:10.5px;color:var(--muted);letter-spacing:.08em}
+.surcharge{margin-top:8px;font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.surcharge .tag{color:var(--amber)}
+
+/* 按鈕 */
+.controls{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.btn{border:0;border-radius:12px;padding:16px 10px;font-size:18px;font-weight:900;letter-spacing:.12em;color:var(--fg);background:var(--panel-2);border:1px solid var(--line)}
+.btn:active{transform:translateY(1px)}
+.btn.go{background:var(--red);border-color:var(--red);color:#fff;grid-column:1/-1;font-size:22px;padding:20px;box-shadow:0 6px 20px rgba(255,43,28,.35)}
+.btn.stop{background:#fff;color:#111;border-color:#fff}
+.btn.small{font-size:14px;padding:11px 8px;letter-spacing:.06em;font-weight:700}
+.btn:disabled{opacity:.4}
+.toolbar{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.toolbar .btn{flex:1 1 0;min-width:0}
+.btn.on{border-color:var(--amber);color:var(--amber)}
+
+/* 區塊 */
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px;margin-top:14px}
+.card h2{margin:0 0 10px;font-size:15px;letter-spacing:.1em;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.card h2 small{color:var(--muted);font-weight:500;font-size:11px;letter-spacing:.04em}
+.search{display:flex;gap:8px}
+.search input{flex:1;min-width:0;background:#0d0b0a;border:1px solid var(--line);border-radius:10px;color:var(--fg);padding:12px;font-size:16px;font-family:inherit}
+.results{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+.results li button{width:100%;text-align:left;background:var(--panel-2);border:1px solid var(--line);color:var(--fg);border-radius:10px;padding:10px 12px;font-size:14px}
+.results li small{display:block;color:var(--muted);font-size:11.5px;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#map{height:300px;border-radius:12px;margin-top:10px;background:#1a1613;border:1px solid var(--line);z-index:0}
+.route-info{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:10px}
+.next-turn{margin-top:10px;background:#0d0b0a;border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;align-items:center;gap:12px}
+.next-turn .arrow{font-size:34px;color:var(--amber);width:44px;text-align:center;flex:none}
+.next-turn .txt{min-width:0}
+.next-turn .txt b{font-size:22px;font-family:var(--font-mono);color:var(--amber);font-weight:400}
+.next-turn .txt div{font-size:15px;overflow-wrap:anywhere}
+.nav-links{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.nav-links a{flex:1 1 0;text-align:center;text-decoration:none;color:var(--fg);background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:11px 8px;font-size:14px;font-weight:700;min-width:0}
+.hint{color:var(--muted);font-size:12px;line-height:1.6;margin:8px 0 0}
+
+/* 我的最愛 */
+.favs{margin-bottom:12px}
+.fav-head{display:flex;justify-content:space-between;align-items:center;font-size:13px;color:var(--muted);letter-spacing:.08em;margin-bottom:8px}
+.linkbtn{background:none;border:0;color:var(--amber);font-size:13px;padding:4px 2px}
+.fav-list{display:flex;flex-wrap:wrap;gap:8px}
+.fav{display:flex;align-items:center;max-width:100%;background:var(--panel-2);border:1px solid var(--line);border-radius:999px;overflow:hidden}
+.fav-go{background:none;border:0;color:var(--fg);padding:9px 14px;font-size:15px;font-weight:700;display:flex;align-items:center;gap:6px;min-width:0}
+.fav-go .ico{color:var(--amber)}
+.fav-go .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fav-go .fare{color:var(--muted);font-weight:400;font-size:12px;font-family:var(--font-mono)}
+.fav-del{background:#3a120d;border:0;border-left:1px solid var(--line);color:var(--red);padding:9px 12px;font-size:14px;font-weight:900}
+.fav-empty{color:var(--muted);font-size:13px;line-height:1.6}
+.fav-save{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.fav-save input{flex:1 1 140px;min-width:0;background:#0d0b0a;border:1px solid var(--line);border-radius:10px;color:var(--fg);padding:11px;font-size:16px;font-family:inherit}
+.fav-save .quick{display:flex;gap:6px;flex-basis:100%}
+.fav-save .quick button{background:var(--panel-2);border:1px solid var(--line);color:var(--fg);border-radius:999px;padding:6px 12px;font-size:13px}
+
+/* 設定 */
+details.card summary{cursor:pointer;font-weight:700;letter-spacing:.1em;font-size:15px;list-style:none;display:flex;justify-content:space-between}
+details.card summary::after{content:"＋";color:var(--muted)}
+details[open].card summary::after{content:"－"}
+.grid-form{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.grid-form label{display:grid;gap:4px;font-size:12px;color:var(--muted);min-width:0}
+.grid-form input,.grid-form select{background:#0d0b0a;border:1px solid var(--line);border-radius:8px;color:var(--fg);padding:9px;font-size:16px;font-family:var(--font-mono);width:100%}
+.grid-form .full{grid-column:1/-1}
+.check{display:flex!important;align-items:center;gap:8px;grid-template-columns:none!important;color:var(--fg)!important;font-size:14px!important}
+.check input{width:22px;height:22px;accent-color:var(--red)}
+
+/* 收據 */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);display:grid;place-items:center;padding:16px;z-index:1000}
+.receipt{background:#f4efe6;color:#1d1915;width:100%;max-width:360px;border-radius:6px;padding:20px 18px;font-family:var(--font-mono);box-shadow:0 20px 50px rgba(0,0,0,.6);max-height:90vh;overflow:auto}
+.receipt h3{font-family:var(--font-body);text-align:center;margin:0 0 2px;font-size:20px;font-weight:900;letter-spacing:.2em}
+.receipt .sub{text-align:center;font-size:12px;color:#6b6157;margin-bottom:12px;font-family:var(--font-body)}
+.receipt table{width:100%;border-collapse:collapse;font-size:14px}
+.receipt td{padding:4px 0;border-bottom:1px dashed #c9bfb2}
+.receipt td:last-child{text-align:right}
+.receipt .total{font-size:30px;text-align:right;margin:12px 0 4px;color:#c4180b}
+.receipt .btn{width:100%;margin-top:12px;background:#1d1915;color:#fff;border-color:#1d1915}
+
+.toast{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 20px);transform:translateX(-50%);background:#000;border:1px solid var(--line);color:var(--fg);padding:10px 16px;border-radius:999px;font-size:14px;z-index:1100;max-width:calc(100% - 32px);text-align:center}
+.leaflet-container{font-family:var(--font-body)}
+@media (prefers-reduced-motion:reduce){.jump{animation:none}}
+@media (max-width:380px){#fareDigits{height:80px}.stat b{font-size:16px}}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="brand">
+    <div class="stamp">紅兵<br>TAXI</div>
+    <h1>紅兵計程車<small>HONG BING TAXI · 計費表</small></h1>
+  </div>
+  <div class="roof" id="roof">空車</div>
+</header>
+
+<section class="meter" aria-label="計費表">
+  <div class="meter-head">
+    <span id="rateName">台北市費率</span>
+    <span class="gps"><i class="dot" id="gpsDot"></i><span id="gpsText">定位中…</span></span>
+  </div>
+  <div class="screen">
+    <div class="fare-row">
+      <span class="fare-label">車資</span>
+      <svg id="fareDigits" viewBox="0 0 280 100" role="img" aria-label="車資"></svg>
+      <span class="yuan">元</span>
+    </div>
+  </div>
+  <div class="stats">
+    <div class="stat"><b id="sDist">0.00</b><span>里程 km</span></div>
+    <div class="stat"><b id="sTime">00:00</b><span>行程時間</span></div>
+    <div class="stat"><b id="sWait">00:00</b><span>低速計時</span></div>
+    <div class="stat"><b id="sSpeed">0</b><span>時速 km/h</span></div>
+  </div>
+  <div class="surcharge">
+    <span>下一跳：<span class="tag" id="nextJump">起跳 1.25 km 內</span></span>
+    <span id="nightTag"></span>
+  </div>
+</section>
+
+<div class="controls">
+  <button class="btn go" id="btnStart">開始計費</button>
+  <button class="btn" id="btnPause" hidden>暫停</button>
+  <button class="btn stop" id="btnEnd" hidden>結束收費</button>
+</div>
+<div class="toolbar">
+  <button class="btn small on" id="btnVoice" aria-pressed="true">🔊 語音開</button>
+  <button class="btn small" id="btnTest">試聽語音</button>
+</div>
+
+<section class="card" aria-label="導航">
+  <h2>導航 <small id="navStatus">輸入目的地或點地圖</small></h2>
+  <div class="favs">
+    <div class="fav-head"><span>⭐ 我的最愛</span><button class="linkbtn" id="btnFavEdit" type="button">編輯</button></div>
+    <div class="fav-list" id="favList"></div>
+  </div>
+  <form class="search" id="searchForm">
+    <input id="destInput" type="search" placeholder="例：台北車站、松山機場" autocomplete="off" enterkeyhint="search">
+    <button class="btn small" type="submit">搜尋</button>
+  </form>
+  <ul class="results" id="results"></ul>
+  <div id="map"></div>
+  <div id="routeBox" hidden>
+    <div class="route-info">
+      <div class="stat"><b id="rDist">–</b><span>路線 km</span></div>
+      <div class="stat"><b id="rTime">–</b><span>預估分鐘</span></div>
+      <div class="stat"><b id="rFare">–</b><span>預估車資</span></div>
+    </div>
+    <div class="next-turn" id="nextTurn">
+      <div class="arrow" id="turnArrow">↑</div>
+      <div class="txt"><b id="turnDist">–</b><div id="turnText">開始導航後顯示下一個路口</div></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn small" id="btnNav">開始語音導航</button>
+      <button class="btn small" id="btnClearDest">清除目的地</button>
+    </div>
+    <div class="toolbar"><button class="btn small" id="btnFavAdd">☆ 加入我的最愛</button></div>
+    <form class="fav-save" id="favForm" hidden>
+      <input id="favName" type="text" maxlength="20" placeholder="取個名字，例：家、公司" enterkeyhint="done">
+      <button class="btn small" type="submit">儲存</button>
+      <div class="quick"><button type="button" data-n="🏠 家">🏠 家</button><button type="button" data-n="🏢 公司">🏢 公司</button><button type="button" data-n="✈️ 機場">✈️ 機場</button></div>
+    </form>
+    <div class="nav-links">
+      <a id="gmapLink" href="#" target="_blank" rel="noopener">Google 地圖導航</a>
+      <a id="amapLink" href="#" target="_blank" rel="noopener">Apple 地圖</a>
+    </div>
+  </div>
+  <p class="hint">路線與語音導航用 OpenStreetMap 資料，路名偶爾不完整；需要即時路況請按「Google 地圖導航」，計費表會在背景繼續算（請回到本頁時再看金額）。</p>
+</section>
+
+<details class="card" id="voiceSettings">
+  <summary>語音設定</summary>
+  <div class="grid-form">
+    <label class="full">聲音風格
+      <select id="vStyle">
+        <option value="standard">標準播報</option>
+        <option value="sweet">甜美嗲聲（女聲調高）</option>
+        <option value="gentle">溫柔慢慢說</option>
+        <option value="deep">低沉大叔</option>
+        <option value="fast">快嘴司機</option>
+        <option value="custom">自訂</option>
+      </select>
+    </label>
+    <label class="full">聲音（手機內建）<select id="vVoice"></select></label>
+    <label>音調 <span id="vPitchVal"></span><input id="vPitch" type="range" min="0" max="2" step="0.1"></label>
+    <label>語速 <span id="vRateVal"></span><input id="vRate" type="range" min="0.5" max="1.8" step="0.05"></label>
+    <label class="full">語音報價間隔（每多少元播一次，0＝只播開始與結束）<input id="fVoiceStep" type="number" inputmode="numeric" min="0"></label>
+    <button class="btn small full" id="vTest" type="button">試聽這個聲音</button>
+  </div>
+  <p class="hint">能選哪些聲音由手機決定：iPhone 可到「設定 › 輔助使用 › 朗讀內容 › 聲音 › 中文（台灣）」下載更多聲音（例如美佳的強化版），Android 可在「文字轉語音」設定安裝 Google 語音資料。下載後重新開啟本頁就會出現在清單裡。</p>
+</details>
+
+<details class="card" id="settings">
+  <summary>費率設定</summary>
+  <div class="grid-form">
+    <label class="full">費率範本
+      <select id="preset">
+        <option value="taipei">台北市／新北市／基隆（85 元起）</option>
+        <option value="taichung">台中市（85 元起）</option>
+        <option value="kaohsiung">高雄市（85 元起）</option>
+        <option value="custom">自訂</option>
+      </select>
+    </label>
+    <label>起跳金額（元）<input id="fBase" type="number" inputmode="numeric" min="0"></label>
+    <label>起跳里程（公尺）<input id="fBaseDist" type="number" inputmode="numeric" min="0"></label>
+    <label>續跳里程（公尺）<input id="fStepDist" type="number" inputmode="numeric" min="1"></label>
+    <label>續跳金額（元）<input id="fStepFare" type="number" inputmode="numeric" min="0"></label>
+    <label>低速計時（秒/跳）<input id="fWaitSec" type="number" inputmode="numeric" min="1"></label>
+    <label>低速門檻（km/h）<input id="fWaitSpeed" type="number" inputmode="decimal" min="0"></label>
+    <label>夜間加成（元/趟）<input id="fNight" type="number" inputmode="numeric" min="0"></label>
+    <label>夜間時段<select id="fNightRange"><option value="23-6">23:00–06:00</option><option value="22-6">22:00–06:00</option><option value="0-0">不加成</option></select></label>
+    <label class="check full"><input id="fSim" type="checkbox"> 模擬行駛（沒有 GPS 時測試用）</label>
+  </div>
+  <p class="hint">費率為各縣市公告的常見數值，若當地調整請改成實際價格。低速計時：時速低於門檻時累計，滿秒數就跳一次續跳金額。</p>
+</details>
+
+<div class="overlay" id="receipt" hidden>
+  <div class="receipt" role="dialog" aria-labelledby="rcTitle">
+    <h3 id="rcTitle">紅兵計程車</h3>
+    <div class="sub" id="rcSub"></div>
+    <table id="rcTable"></table>
+    <div class="total" id="rcTotal"></div>
+    <button class="btn" id="rcClose">完成，回到空車</button>
+  </div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(() => {
+"use strict";
+
+/* ---------- 費率 ---------- */
+const PRESETS = {
+  taipei:    {name:"台北市費率", base:85, baseDist:1250, stepDist:200, stepFare:5, waitSec:60, waitSpeed:5, night:20, nightRange:"23-6"},
+  taichung:  {name:"台中市費率", base:85, baseDist:1500, stepDist:200, stepFare:5, waitSec:120, waitSpeed:5, night:20, nightRange:"23-6"},
+  kaohsiung: {name:"高雄市費率", base:85, baseDist:1250, stepDist:230, stepFare:5, waitSec:150, waitSpeed:5, night:20, nightRange:"23-6"},
+};
+const DEFAULT_SETTINGS = {preset:"taipei", ...PRESETS.taipei, voiceStep:50, voice:true, sim:false, vStyle:"standard", voiceURI:"", pitch:1, rate:1};
+
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; }catch{ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch{} },
+  del(k){ try{ localStorage.removeItem(k); }catch{} },
+};
+let S = {...DEFAULT_SETTINGS, ...store.get("hb_settings", {})};
+
+/* ---------- 行程狀態 ---------- */
+const emptyTrip = () => ({state:"idle", startedAt:0, elapsed:0, lastTick:0, dist:0, wait:0, night:false, lastFare:0, lastVoiceFare:0, path:[]});
+let T = {...emptyTrip(), ...store.get("hb_trip", {})};
+if (T.state === "running") T.lastTick = Date.now(); // 重新整理後接續
+const saveTrip = () => store.set("hb_trip", {...T, path: T.path.slice(-400)});
+
+/* ---------- 定位狀態 ---------- */
+let pos = null;          // {lat,lng,acc,t}
+let lastAccepted = null; // 上次計入里程的點
+let speedKmh = 0;
+let lastFixAt = 0;
+
+const $ = id => document.getElementById(id);
+
+/* ---------- 七段顯示器 ---------- */
+const SEG = { // a b c d e f g
+  "0":"1111110","1":"0110000","2":"1101101","3":"1111001","4":"0110011",
+  "5":"1011011","6":"1011111","7":"1110000","8":"1111111","9":"1111011"," ":"0000000"
+};
+function segPaths(x){ // 單一位數 56 寬、100 高
+  const w=44, h=88, t=8, X=x+6, Y=6, k=3;
+  const hz=(x0,y0)=>`M${x0+k},${y0} h${w-2*k} l${t/2},${t/2} l-${t/2},${t/2} h-${w-2*k} l-${t/2},-${t/2}z`;
+  const vt=(x0,y0)=>`M${x0},${y0+k} l${t/2},-${t/2} l${t/2},${t/2} v${h/2-2*k-t/2} l-${t/2},${t/2} l-${t/2},-${t/2}z`;
+  return [
+    hz(X, Y-t/2),             // a
+    vt(X+w-t/2, Y),           // b
+    vt(X+w-t/2, Y+h/2),       // c
+    hz(X, Y+h-t/2),           // d
+    vt(X-t/2, Y+h/2),         // e
+    vt(X-t/2, Y),             // f
+    hz(X, Y+h/2-t/2),         // g
+  ].map(d=>`<path transform="skewX(-6) translate(8 0)" d="${d}"/>`);
+}
+const DIGITS = 5;
+(function buildDigits(){
+  const svg = $("fareDigits");
+  let html = "";
+  for (let i=0;i<DIGITS;i++){
+    const segs = segPaths(i*56);
+    html += `<g data-i="${i}">${segs.map((p,j)=>p.replace("<path",`<path data-s="${j}"`)).join("")}</g>`;
+  }
+  svg.innerHTML = html;
+})();
+function showFare(n){
+  const s = String(Math.max(0, Math.round(n))).padStart(DIGITS, " ").slice(-DIGITS);
+  const groups = $("fareDigits").querySelectorAll("g");
+  groups.forEach((g,i)=>{
+    const code = SEG[s[i]] || SEG[" "];
+    g.querySelectorAll("path").forEach((p,j)=>{
+      const on = code[j]==="1";
+      p.setAttribute("fill", on ? "var(--red)" : "var(--red-dim)");
+      p.style.filter = on ? "drop-shadow(0 0 4px rgba(255,43,28,.85))" : "none";
+    });
+  });
+  $("fareDigits").setAttribute("aria-label", `車資 ${Math.round(n)} 元`);
+}
+
+/* ---------- 計費 ---------- */
+function isNight(d=new Date()){
+  const [a,b] = S.nightRange.split("-").map(Number);
+  if (a===b) return false;
+  const h = d.getHours();
+  return a > b ? (h>=a || h<b) : (h>=a && h<b);
+}
+function calc(dist, wait, night){
+  const extra = Math.max(0, dist - S.baseDist);
+  const distJumps = Math.floor(extra / S.stepDist);
+  const waitJumps = Math.floor(wait / S.waitSec);
+  const nightFee = night ? S.night : 0;
+  return {
+    distJumps, waitJumps, nightFee,
+    total: S.base + (distJumps + waitJumps) * S.stepFare + nightFee,
+    toNext: dist < S.baseDist ? S.baseDist - dist : S.stepDist - (extra % S.stepDist),
+  };
+}
+function estimateFare(meters, seconds){
+  // 粗估：塞車/紅燈約占行程時間 20%
+  return calc(meters, seconds*0.2, isNight()).total;
+}
+
+/* ---------- 語音 ---------- */
+const synth = window.speechSynthesis;
+let zhVoice = null, zhVoices = [];
+// 風格＝音調＋語速＋偏好的聲音性別（名稱關鍵字只是猜測，找不到就用預設中文聲音）
+const VSTYLES = {
+  standard:{pitch:1.0, rate:1.0},
+  sweet:   {pitch:1.6, rate:1.08, prefer:"female"},
+  gentle:  {pitch:1.2, rate:0.82, prefer:"female"},
+  deep:    {pitch:0.55, rate:0.92, prefer:"male"},
+  fast:    {pitch:1.0, rate:1.45},
+};
+const FEMALE = /mei|jia|ting|yu-?shu|hanhan|hsiao|xiao|yating|female|女|美佳|語芯|曉/i;
+const MALE = /zhiwei|yun|kang|male|男|志/i;
+function voiceRank(v){ return /zh[-_]TW/i.test(v.lang) ? 0 : /zh[-_](HK|Hant)/i.test(v.lang) ? 1 : 2; }
+function pickVoice(){
+  if (!synth) return;
+  zhVoices = synth.getVoices().filter(v=>/^zh|cmn|yue/i.test(v.lang)).sort((a,b)=>voiceRank(a)-voiceRank(b));
+  zhVoice = zhVoices.find(v=>v.voiceURI===S.voiceURI) || zhVoices[0] || null;
+  const sel = $("vVoice");
+  sel.innerHTML = zhVoices.length
+    ? zhVoices.map(v=>`<option value="${escapeHtml(v.voiceURI)}">${escapeHtml(v.name)}（${escapeHtml(v.lang)}）</option>`).join("")
+    : `<option value="">手機預設聲音</option>`;
+  sel.value = zhVoice ? zhVoice.voiceURI : "";
+}
+function applyStyle(name){
+  const st = VSTYLES[name]; if (!st) return;
+  S.pitch = st.pitch; S.rate = st.rate;
+  if (st.prefer){
+    const re = st.prefer==="female" ? FEMALE : MALE;
+    const v = zhVoices.find(v=>voiceRank(v)===0 && re.test(v.name)) || zhVoices.find(v=>re.test(v.name));
+    if (v){ zhVoice = v; S.voiceURI = v.voiceURI; }
+  }
+}
+function fillVoiceForm(){
+  $("vStyle").value = S.vStyle;
+  $("vPitch").value = S.pitch; $("vRate").value = S.rate;
+  $("vPitchVal").textContent = Number(S.pitch).toFixed(1);
+  $("vRateVal").textContent = Number(S.rate).toFixed(2)+"×";
+  if (zhVoice) $("vVoice").value = zhVoice.voiceURI;
+}
+function say(text, {force=false, interrupt=false}={}){
+  if (!synth || (!S.voice && !force)) return;
+  if (interrupt) synth.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = zhVoice ? zhVoice.lang : "zh-TW"; if (zhVoice) u.voice = zhVoice;
+  u.rate = S.rate; u.pitch = S.pitch;
+  synth.speak(u);
+}
+function setVoiceBtn(){
+  $("btnVoice").textContent = S.voice ? "🔊 語音開" : "🔇 語音關";
+  $("btnVoice").classList.toggle("on", S.voice);
+  $("btnVoice").setAttribute("aria-pressed", String(S.voice));
+}
+$("btnVoice").onclick = () => { S.voice = !S.voice; store.set("hb_settings", S); setVoiceBtn(); if (S.voice) say("語音播報已開啟"); else synth && synth.cancel(); };
+$("btnTest").onclick = () => say(`歡迎搭乘紅兵計程車，目前車資 ${Math.round(calc(T.dist,T.wait,T.night).total)} 元`, {force:true, interrupt:true});
+if (!synth) { $("btnTest").disabled = true; $("btnVoice").disabled = true; }
+
+/* ---------- 跳表音 ---------- */
+let audioCtx = null;
+function beep(){
+  try{
+    audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.type="square"; o.frequency.value=1760; g.gain.value=0.05;
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(); o.stop(audioCtx.currentTime+0.07);
+  }catch{}
+  if (navigator.vibrate) navigator.vibrate(40);
+}
+
+/* ---------- 螢幕常亮 ---------- */
+let wakeLock = null;
+async function keepAwake(on){
+  try{
+    if (on && "wakeLock" in navigator && !wakeLock){ wakeLock = await navigator.wakeLock.request("screen"); wakeLock.addEventListener("release",()=>wakeLock=null); }
+    if (!on && wakeLock){ await wakeLock.release(); wakeLock=null; }
+  }catch{}
+}
+document.addEventListener("visibilitychange", ()=>{ if (document.visibilityState==="visible" && T.state==="running") keepAwake(true); });
+
+/* ---------- 畫面更新 ---------- */
+const mmss = s => { s=Math.floor(s); const h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60; return (h? h+":"+String(m).padStart(2,"0") : String(m).padStart(2,"0"))+":"+String(x).padStart(2,"0"); };
+function render(){
+  const f = calc(T.dist, T.wait, T.night);
+  const fare = T.state==="idle" ? S.base + (isNight()? S.night:0) : f.total;
+  showFare(fare);
+  if (T.state!=="idle" && f.total > T.lastFare){
+    if (T.lastFare) { beep(); const el=$("fareDigits"); el.classList.remove("jump"); void el.getBBox(); el.classList.add("jump"); }
+    T.lastFare = f.total;
+    if (S.voiceStep>0 && f.total - T.lastVoiceFare >= S.voiceStep){
+      T.lastVoiceFare = Math.floor(f.total / S.voiceStep) * S.voiceStep;
+      if (!navActive) say(`目前車資 ${f.total} 元`);
+    }
+  }
+  $("sDist").textContent = (T.dist/1000).toFixed(2);
+  $("sTime").textContent = mmss(T.elapsed/1000);
+  $("sWait").textContent = mmss(T.wait);
+  $("sSpeed").textContent = Math.round(speedKmh);
+  $("nextJump").textContent = T.dist < S.baseDist
+    ? `起跳內，再 ${Math.ceil(f.toNext)} m`
+    : `再 ${Math.ceil(f.toNext)} m 或低速 ${S.waitSec - (T.wait % S.waitSec)} 秒`;
+  const night = T.state==="idle" ? isNight() : T.night;
+  $("nightTag").innerHTML = night && S.night ? `<span class="tag">夜間加成 +${S.night}</span>` : "";
+  $("rateName").textContent = S.name || "自訂費率";
+  const roof = $("roof");
+  roof.textContent = T.state==="idle" ? "空車" : T.state==="paused" ? "暫停" : "載客";
+  roof.classList.toggle("busy", T.state!=="idle");
+  $("btnStart").hidden = T.state!=="idle";
+  $("btnPause").hidden = T.state==="idle";
+  $("btnEnd").hidden = T.state==="idle";
+  $("btnPause").textContent = T.state==="paused" ? "繼續" : "暫停";
+}
+
+/* ---------- 每秒計時 ---------- */
+setInterval(()=>{
+  const now = Date.now();
+  if (now - lastFixAt > 8000 && !S.sim) speedKmh = 0; // 太久沒新定位視為停住
+  if (T.state==="running"){
+    const dt = now - (T.lastTick||now);
+    T.lastTick = now;
+    if (dt > 0 && dt < 5*60*1000){ // 背景暫停太久就不補算時間
+      T.elapsed += dt;
+      if (speedKmh < S.waitSpeed) T.wait += dt/1000;
+    }
+    saveTrip();
+  }
+  if (S.sim) simStep();
+  render();
+}, 1000);
+
+/* ---------- GPS ---------- */
+function haversine(a,b){
+  const R=6371000, toR=Math.PI/180;
+  const dLat=(b.lat-a.lat)*toR, dLng=(b.lng-a.lng)*toR;
+  const s=Math.sin(dLat/2)**2 + Math.cos(a.lat*toR)*Math.cos(b.lat*toR)*Math.sin(dLng/2)**2;
+  return 2*R*Math.asin(Math.sqrt(s));
+}
+function setGps(cls, txt){ $("gpsDot").className = "dot "+cls; $("gpsText").textContent = txt; }
+function onFix(p){
+  const c = p.coords;
+  const fix = {lat:c.latitude, lng:c.longitude, acc:c.accuracy||999, t:p.timestamp||Date.now()};
+  handleFix(fix, c.speed);
+}
+function handleFix(fix, gpsSpeed){
+  lastFixAt = Date.now();
+  pos = fix;
+  setGps(fix.acc<=20?"ok":fix.acc<=50?"warn":"bad", `精度 ±${Math.round(fix.acc)}m`);
+  // 速度
+  if (lastAccepted){
+    const d = haversine(lastAccepted, fix), dt = (fix.t - lastAccepted.t)/1000;
+    if (gpsSpeed!=null && gpsSpeed>=0) speedKmh = gpsSpeed*3.6;
+    else if (dt>0) speedKmh = d/dt*3.6;
+  }
+  // 里程：精度太差不算；位移要超過雜訊範圍才累計
+  if (fix.acc <= 50){
+    if (!lastAccepted){ lastAccepted = fix; }
+    else {
+      const d = haversine(lastAccepted, fix);
+      const dt = (fix.t - lastAccepted.t)/1000;
+      const v = dt>0 ? d/dt : 0;
+      const noise = Math.max(6, Math.min(fix.acc, 25));
+      if (v > 70) { /* 超過 250km/h 視為飄點，丟棄 */ }
+      else if (d >= noise){
+        if (T.state==="running"){ T.dist += d; T.path.push([fix.lat, fix.lng]); trail.addLatLng([fix.lat, fix.lng]); }
+        lastAccepted = fix;
+      } else if (dt > 15) {
+        speedKmh = gpsSpeed!=null && gpsSpeed>=0 ? gpsSpeed*3.6 : 0;
+      }
+    }
+  }
+  updateMapPos();
+  navTick();
+  if (Date.now() - lastFavRender > 15000 && !favEdit) renderFavs(); // 更新與各最愛的距離
+}
+function onGpsErr(e){
+  const msg = e.code===1 ? "未允許定位" : e.code===2 ? "收不到定位" : "定位逾時";
+  setGps("bad", msg);
+  if (e.code===1) toast("請到瀏覽器設定允許此網頁使用位置，才能計算里程");
+}
+let watchId = null;
+function startGps(){
+  if (!("geolocation" in navigator)){ setGps("bad","此瀏覽器不支援定位"); return; }
+  if (watchId!=null) return;
+  watchId = navigator.geolocation.watchPosition(onFix, onGpsErr, {enableHighAccuracy:true, maximumAge:0, timeout:20000});
+}
+
+/* ---------- 模擬行駛 ---------- */
+let simHeading = 0, simV = 0;
+function simStep(){
+  const base = pos || {lat:25.0478, lng:121.5170, acc:5, t:Date.now()};
+  // 時快時慢，偶爾停車等紅燈
+  const r = Math.random();
+  simV = r<0.12 ? 0 : Math.min(16, Math.max(0, simV + (Math.random()-0.4)*4)); // m/s
+  if (navActive && route){ // 沿路線前進
+    const target = route.coords[Math.min(simIdx, route.coords.length-1)];
+    const d = haversine(base, {lat:target[0], lng:target[1]});
+    if (d < 20 && simIdx < route.coords.length-1) simIdx++;
+    simHeading = Math.atan2(target[1]-base.lng, target[0]-base.lat);
+  } else simHeading += (Math.random()-0.5)*0.4;
+  const dLat = simV*Math.cos(simHeading)/111320;
+  const dLng = simV*Math.sin(simHeading)/(111320*Math.cos(base.lat*Math.PI/180));
+  handleFix({lat:base.lat+dLat, lng:base.lng+dLng, acc:5, t:Date.now()}, simV);
+}
+let simIdx = 0;
+
+/* ---------- 按鈕 ---------- */
+$("btnStart").onclick = () => {
+  if (!pos && !S.sim) toast("還沒抓到定位，先開始計時，定位到了就會累計里程");
+  T = {...emptyTrip(), state:"running", startedAt:Date.now(), lastTick:Date.now(), night:isNight()};
+  T.lastFare = calc(0,0,T.night).total;
+  T.lastVoiceFare = Math.floor(T.lastFare / Math.max(1,S.voiceStep)) * Math.max(1,S.voiceStep);
+  lastAccepted = pos;
+  trail.setLatLngs(pos ? [[pos.lat,pos.lng]] : []);
+  saveTrip(); keepAwake(true);
+  say(`歡迎搭乘紅兵計程車，開始計費，起跳 ${T.lastFare} 元${T.night && S.night ? "，含夜間加成" : ""}。請繫好安全帶。`, {interrupt:true});
+  render();
+};
+$("btnPause").onclick = () => {
+  if (T.state==="running"){ T.state="paused"; say("計費暫停"); }
+  else { T.state="running"; T.lastTick=Date.now(); lastAccepted=pos; say("繼續計費"); }
+  saveTrip(); render();
+};
+$("btnEnd").onclick = () => {
+  const f = calc(T.dist, T.wait, T.night);
+  T.state = "ended"; saveTrip();
+  const start = new Date(T.startedAt);
+  $("rcSub").textContent = `${start.toLocaleDateString("zh-TW")} ${start.toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit"})} 上車 · ${S.name||"自訂費率"}`;
+  const rows = [
+    ["起跳（"+(S.baseDist/1000)+" km）", S.base],
+    [`里程續跳 ×${f.distJumps}`, f.distJumps*S.stepFare],
+    [`低速計時 ×${f.waitJumps}`, f.waitJumps*S.stepFare],
+  ];
+  if (f.nightFee) rows.push(["夜間加成", f.nightFee]);
+  rows.push(["總里程", (T.dist/1000).toFixed(2)+" km"], ["行程時間", mmss(T.elapsed/1000)]);
+  $("rcTable").innerHTML = rows.map(([a,b])=>`<tr><td>${a}</td><td>${typeof b==="number" ? b+" 元" : b}</td></tr>`).join("");
+  $("rcTotal").textContent = `NT$ ${f.total}`;
+  $("receipt").hidden = false;
+  stopNav(false);
+  say(`已到達，本次車資 ${f.total} 元，謝謝搭乘紅兵計程車，請記得隨身物品。`, {interrupt:true});
+  keepAwake(false);
+};
+$("rcClose").onclick = () => { $("receipt").hidden = true; T = emptyTrip(); store.del("hb_trip"); trail.setLatLngs([]); render(); };
+
+/* ---------- 地圖 ---------- */
+const map = L.map("map", {zoomControl:true, attributionControl:true}).setView([25.0478,121.5170], 15);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom:19, attribution:"© OpenStreetMap"}).addTo(map);
+const me = L.circleMarker([25.0478,121.5170], {radius:8, color:"#fff", weight:3, fillColor:"#ff2b1c", fillOpacity:1});
+const accCircle = L.circle([25.0478,121.5170], {radius:10, color:"#ff2b1c", weight:1, fillOpacity:.08});
+const trail = L.polyline(T.path||[], {color:"#ffb627", weight:4, opacity:.8}).addTo(map);
+let routeLine = null, destMarker = null, dest = null, route = null, follow = true;
+map.on("dragstart", ()=>follow=false);
+function updateMapPos(){
+  if (!pos) return;
+  const ll = [pos.lat,pos.lng];
+  if (!map.hasLayer(me)){ me.addTo(map); accCircle.addTo(map); map.setView(ll, 16); }
+  me.setLatLng(ll); accCircle.setLatLng(ll).setRadius(pos.acc);
+  if (follow && (navActive || T.state==="running")) map.panTo(ll, {animate:true});
+}
+const recenter = L.control({position:"bottomright"});
+recenter.onAdd = () => { const b = L.DomUtil.create("button"); b.textContent="◎"; b.title="回到目前位置"; b.style.cssText="width:40px;height:40px;font-size:20px;border-radius:8px;border:0;background:#fff;color:#111"; L.DomEvent.on(b,"click",e=>{L.DomEvent.stop(e); follow=true; if(pos) map.setView([pos.lat,pos.lng],17);}); return b; };
+recenter.addTo(map);
+map.on("click", e => setDest({lat:e.latlng.lat, lng:e.latlng.lng, name:"地圖選取的地點"}));
+
+/* ---------- 搜尋目的地（OpenStreetMap Nominatim） ---------- */
+$("searchForm").onsubmit = async e => {
+  e.preventDefault();
+  const q = $("destInput").value.trim();
+  if (!q) return;
+  $("results").innerHTML = `<li class="hint">搜尋中…</li>`;
+  try{
+    const near = pos ? `&viewbox=${pos.lng-0.5},${pos.lat+0.5},${pos.lng+0.5},${pos.lat-0.5}` : "";
+    const r = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&accept-language=zh-TW&countrycodes=tw${near}&q=${encodeURIComponent(q)}`);
+    const list = await r.json();
+    if (!list.length){ $("results").innerHTML = `<li class="hint">找不到「${escapeHtml(q)}」，試試加上縣市或路名，或直接點地圖選目的地。</li>`; return; }
+    $("results").innerHTML = "";
+    list.forEach(it=>{
+      const li = document.createElement("li"), b = document.createElement("button");
+      const title = it.name || it.display_name.split(",")[0];
+      b.innerHTML = `${escapeHtml(title)}<small>${escapeHtml(it.display_name)}</small>`;
+      b.onclick = () => { $("results").innerHTML=""; setDest({lat:+it.lat, lng:+it.lon, name:title}); };
+      li.appendChild(b); $("results").appendChild(li);
+    });
+  }catch{ $("results").innerHTML = `<li class="hint">搜尋失敗，請確認網路連線後再試。</li>`; }
+};
+const escapeHtml = s => String(s).replace(/[&<>"']/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+async function setDest(d){
+  dest = d;
+  if (destMarker) destMarker.remove();
+  destMarker = L.marker([d.lat,d.lng]).addTo(map).bindPopup(escapeHtml(d.name)).openPopup();
+  $("navStatus").textContent = d.name;
+  const g = `https://www.google.com/maps/dir/?api=1&destination=${d.lat},${d.lng}&travelmode=driving` + (pos? `&origin=${pos.lat},${pos.lng}`:"");
+  $("gmapLink").href = g;
+  $("amapLink").href = `https://maps.apple.com/?daddr=${d.lat},${d.lng}&dirflg=d` + (pos? `&saddr=${pos.lat},${pos.lng}`:"");
+  $("routeBox").hidden = false;
+  $("favForm").hidden = true;
+  updateFavBtn();
+  await fetchRoute();
+  if (routeLine) map.fitBounds(routeLine.getBounds(), {padding:[30,30]});
+}
+$("btnClearDest").onclick = () => {
+  stopNav(true); dest=null; route=null;
+  if (destMarker) destMarker.remove(); if (routeLine) routeLine.remove();
+  $("routeBox").hidden = true; $("navStatus").textContent = "輸入目的地或點地圖";
+};
+
+/* ---------- 我的最愛 ---------- */
+let favs = store.get("hb_favs", []);
+let favEdit = false, lastFavRender = 0;
+const saveFavs = () => store.set("hb_favs", favs);
+const findFav = d => favs.find(f => haversine(f, d) < 50);
+function renderFavs(){
+  lastFavRender = Date.now();
+  const box = $("favList");
+  $("btnFavEdit").hidden = !favs.length;
+  $("btnFavEdit").textContent = favEdit ? "完成" : "編輯";
+  if (!favs.length){
+    favEdit = false;
+    box.innerHTML = `<div class="fav-empty">還沒有常用地點。選好目的地後，按地圖下方的「加入我的最愛」。</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  [...favs].sort((a,b)=>(b.uses||0)-(a.uses||0)).forEach(f=>{
+    const chip = document.createElement("div"); chip.className = "fav";
+    const go = document.createElement("button"); go.className = "fav-go"; go.type = "button";
+    const hasIcon = /^\p{Extended_Pictographic}/u.test(f.name);
+    const km = pos ? (haversine(pos, f)/1000).toFixed(1)+"km" : "";
+    go.innerHTML = `${hasIcon ? "" : '<span class="ico">★</span>'}<span class="nm">${escapeHtml(f.name)}</span>${km ? `<span class="fare">${km}</span>` : ""}`;
+    go.onclick = () => {
+      if (favEdit) return;
+      f.uses = (f.uses||0) + 1; saveFavs();
+      setDest({lat:f.lat, lng:f.lng, name:f.name});
+      say(`目的地，${f.name.replace(/^\p{Extended_Pictographic}️?\s*/u,"")}`);
+    };
+    chip.appendChild(go);
+    if (favEdit){
+      const del = document.createElement("button"); del.className = "fav-del"; del.type = "button";
+      del.textContent = "✕"; del.setAttribute("aria-label", `刪除 ${f.name}`);
+      del.onclick = () => { favs = favs.filter(x=>x!==f); saveFavs(); renderFavs(); updateFavBtn(); toast(`已刪除「${f.name}」`); };
+      chip.appendChild(del);
+    }
+    box.appendChild(chip);
+  });
+}
+function updateFavBtn(){
+  const b = $("btnFavAdd");
+  const f = dest && findFav(dest);
+  b.textContent = f ? `★ 已在最愛：${f.name}` : "☆ 加入我的最愛";
+  b.classList.toggle("on", !!f);
+  b.disabled = !!f;
+}
+$("btnFavEdit").onclick = () => { favEdit = !favEdit; renderFavs(); };
+$("btnFavAdd").onclick = () => {
+  if (!dest) return;
+  const form = $("favForm");
+  form.hidden = !form.hidden;
+  if (!form.hidden){
+    $("favName").value = dest.name === "地圖選取的地點" ? "" : dest.name;
+    $("favName").focus();
+  }
+};
+$("favForm").querySelectorAll(".quick button").forEach(b => b.onclick = () => { $("favName").value = b.dataset.n; });
+$("favForm").onsubmit = e => {
+  e.preventDefault();
+  const name = $("favName").value.trim();
+  if (!name){ toast("請先輸入名稱"); $("favName").focus(); return; }
+  if (!dest) return;
+  const same = favs.find(f => f.name === name);
+  if (same){ Object.assign(same, {lat:dest.lat, lng:dest.lng}); toast(`已更新「${name}」的位置`); }
+  else { favs.push({name, lat:dest.lat, lng:dest.lng, uses:0}); toast(`已加入我的最愛：${name}`); }
+  saveFavs();
+  dest.name = name; $("navStatus").textContent = name;
+  $("favForm").hidden = true;
+  renderFavs(); updateFavBtn();
+};
+
+/* ---------- 路線（OSRM） ---------- */
+let routing = false, lastRouteAt = 0;
+async function fetchRoute(){
+  if (!dest) return;
+  const from = pos || {lat:map.getCenter().lat, lng:map.getCenter().lng};
+  if (routing) return; routing = true; lastRouteAt = Date.now();
+  try{
+    const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${from.lng},${from.lat};${dest.lng},${dest.lat}?overview=full&geometries=geojson&steps=true`);
+    const j = await r.json();
+    if (j.code!=="Ok" || !j.routes.length) throw 0;
+    const rt = j.routes[0];
+    route = {
+      coords: rt.geometry.coordinates.map(([x,y])=>[y,x]),
+      steps: rt.legs[0].steps.map(s=>({lat:s.maneuver.location[1], lng:s.maneuver.location[0], type:s.maneuver.type, mod:s.maneuver.modifier||"", name:s.name||"", exit:s.maneuver.exit, spoken:{}})),
+      distance: rt.distance, duration: rt.duration,
+    };
+    stepIdx = 1; simIdx = 0;
+    if (routeLine) routeLine.remove();
+    routeLine = L.polyline(route.coords, {color:"#4aa3ff", weight:6, opacity:.85}).addTo(map);
+    trail.bringToFront();
+    $("rDist").textContent = (route.distance/1000).toFixed(1);
+    $("rTime").textContent = Math.round(route.duration/60 * 1.3); // OSRM 偏樂觀，市區乘 1.3
+    $("rFare").textContent = estimateFare(route.distance, route.duration*1.3);
+  }catch{
+    toast("路線規劃失敗，可改用 Google 地圖導航");
+  }finally{ routing = false; }
+}
+
+/* ---------- 語音導航 ---------- */
+let navActive = false, stepIdx = 1, offRouteSince = 0;
+const MOD = {left:"左轉", right:"右轉", "slight left":"靠左", "slight right":"靠右", "sharp left":"左轉", "sharp right":"右轉", straight:"直行", uturn:"迴轉"};
+const ARROW = {left:"↰", right:"↱", "slight left":"↖", "slight right":"↗", "sharp left":"↰", "sharp right":"↱", straight:"↑", uturn:"↶"};
+function stepText(s){
+  const road = s.name ? `，進入${s.name}` : "";
+  switch (s.type){
+    case "arrive": return "抵達目的地";
+    case "roundabout": case "rotary": return `進入圓環${s.exit? "，從第"+s.exit+"個出口出去" : ""}${road}`;
+    case "merge": return `${MOD[s.mod]||""}匯入${s.name||"車道"}`;
+    case "on ramp": return `${MOD[s.mod]||""}上匝道${road}`;
+    case "off ramp": return `${MOD[s.mod]||""}下匝道${road}`;
+    case "fork": return `走${s.mod.includes("left")?"左":"右"}側岔路${road}`;
+    case "continue": case "new name": return s.mod==="straight"||!s.mod ? `繼續直行${road}` : `${MOD[s.mod]}${road}`;
+    default: return `${MOD[s.mod]||"前進"}${road}`;
+  }
+}
+function fmtDist(m){ return m>=1000 ? (m/1000).toFixed(1)+" 公里" : (Math.round(m/10)*10)+" 公尺"; }
+function distToRoute(p){
+  if (!route) return 0;
+  const cos = Math.cos(p.lat*Math.PI/180), P=[p.lng*cos*111320, p.lat*111320];
+  let best = Infinity;
+  const c = route.coords;
+  for (let i=0;i<c.length-1;i++){
+    const A=[c[i][1]*cos*111320, c[i][0]*111320], B=[c[i+1][1]*cos*111320, c[i+1][0]*111320];
+    const dx=B[0]-A[0], dy=B[1]-A[1], L2=dx*dx+dy*dy;
+    let t = L2 ? ((P[0]-A[0])*dx+(P[1]-A[1])*dy)/L2 : 0; t=Math.max(0,Math.min(1,t));
+    const ex=A[0]+t*dx-P[0], ey=A[1]+t*dy-P[1];
+    best = Math.min(best, Math.hypot(ex,ey));
+  }
+  return best;
+}
+function navTick(){
+  if (!navActive || !route || !pos) return;
+  const s = route.steps[stepIdx];
+  if (!s) return;
+  const d = haversine(pos, s);
+  $("turnDist").textContent = fmtDist(d);
+  $("turnText").textContent = stepText(s);
+  $("turnArrow").textContent = s.type==="arrive" ? "⚑" : (ARROW[s.mod] || "↑");
+  if (s.type==="arrive" && d < 40){
+    say(`已抵達目的地附近${T.state==="running" ? "，目前車資 "+calc(T.dist,T.wait,T.night).total+" 元" : ""}`, {interrupt:true});
+    stopNav(false); return;
+  }
+  // 依距離提前播報：500m、150m、即將
+  const fast = speedKmh > 50;
+  if (!s.spoken.far && d < (fast?800:400) && d > 200){ s.spoken.far=true; say(`${fmtDist(d)}後，${stepText(s)}`); }
+  if (!s.spoken.near && d <= (fast?250:150) && d > 35){ s.spoken.near=true; s.spoken.far=true; say(`前方${fmtDist(d)}，${stepText(s)}`); }
+  if (!s.spoken.now && d <= 35){ s.spoken.now=true; s.spoken.near=true; s.spoken.far=true; say(stepText(s), {interrupt:true}); }
+  if (d < 25){ stepIdx++; }
+  // 偏離路線：持續離開 60 公尺以上 10 秒就重新規劃
+  const off = distToRoute(pos);
+  if (off > 60){
+    offRouteSince = offRouteSince || Date.now();
+    if (Date.now()-offRouteSince > 10000 && Date.now()-lastRouteAt > 20000){
+      say("已偏離路線，重新規劃中"); offRouteSince = 0;
+      fetchRoute().then(()=>{ if (route) say(`新路線，${route.steps[1] ? fmtDist(haversine(pos,route.steps[1]))+"後，"+stepText(route.steps[1]) : ""}`); });
+    }
+  } else offRouteSince = 0;
+}
+function startNav(){
+  if (!route){ toast("還沒有路線"); return; }
+  if (!pos && !S.sim){ toast("等定位抓到後再開始導航"); return; }
+  navActive = true; follow = true; keepAwake(true);
+  $("btnNav").textContent = "停止導航"; $("btnNav").classList.add("on");
+  const first = route.steps[1];
+  say(`開始導航，前往${dest.name}，全程約 ${(route.distance/1000).toFixed(1)} 公里。${first ? "請沿路線行駛，"+fmtDist(haversine(pos||first, first))+"後，"+stepText(first) : ""}`, {interrupt:true});
+  if (pos) map.setView([pos.lat,pos.lng], 17);
+  navTick();
+}
+function stopNav(announce){
+  if (!navActive) return;
+  navActive = false;
+  $("btnNav").textContent = "開始語音導航"; $("btnNav").classList.remove("on");
+  if (announce) say("導航結束");
+  if (T.state!=="running") keepAwake(false);
+}
+$("btnNav").onclick = () => navActive ? stopNav(true) : startNav();
+
+/* ---------- 設定表單 ---------- */
+const F = {base:"fBase", baseDist:"fBaseDist", stepDist:"fStepDist", stepFare:"fStepFare", waitSec:"fWaitSec", waitSpeed:"fWaitSpeed", night:"fNight", voiceStep:"fVoiceStep"};
+function fillForm(){
+  $("preset").value = S.preset;
+  for (const [k,id] of Object.entries(F)) $(id).value = S[k];
+  $("fNightRange").value = S.nightRange;
+  $("fSim").checked = !!S.sim;
+}
+$("preset").onchange = e => {
+  const p = PRESETS[e.target.value];
+  S.preset = e.target.value;
+  if (p) Object.assign(S, p); else S.name = "自訂費率";
+  store.set("hb_settings", S); fillForm(); render();
+};
+for (const [k,id] of Object.entries(F)){
+  $(id).oninput = e => {
+    const v = parseFloat(e.target.value);
+    if (!isFinite(v) || v<0) return;
+    if ((k==="stepDist"||k==="waitSec") && v<=0) return;
+    S[k] = v;
+    if (k!=="voiceStep"){ S.preset = "custom"; S.name = "自訂費率"; $("preset").value = "custom"; }
+    store.set("hb_settings", S); render();
+  };
+}
+$("fNightRange").onchange = e => { S.nightRange = e.target.value; store.set("hb_settings", S); render(); };
+const SAMPLE = {standard:"歡迎搭乘紅兵計程車，目前車資一百二十五元。", sweet:"歡迎搭乘紅兵計程車～前方兩百公尺右轉喔！", gentle:"您好，歡迎搭乘紅兵計程車，請繫好安全帶。", deep:"紅兵計程車，開始計費，起跳八十五元。", fast:"前方一百五十公尺左轉，進入忠孝東路。", custom:"歡迎搭乘紅兵計程車，目前車資一百二十五元。"};
+$("vStyle").onchange = e => { S.vStyle = e.target.value; applyStyle(S.vStyle); store.set("hb_settings", S); fillVoiceForm(); say(SAMPLE[S.vStyle], {force:true, interrupt:true}); };
+$("vVoice").onchange = e => { zhVoice = zhVoices.find(v=>v.voiceURI===e.target.value) || null; S.voiceURI = e.target.value; store.set("hb_settings", S); say(SAMPLE[S.vStyle], {force:true, interrupt:true}); };
+const tune = (k, el) => { S[k] = parseFloat(el.value); S.vStyle = "custom"; store.set("hb_settings", S); fillVoiceForm(); };
+$("vPitch").oninput = e => tune("pitch", e.target);
+$("vRate").oninput = e => tune("rate", e.target);
+$("vPitch").onchange = $("vRate").onchange = () => say(SAMPLE.custom, {force:true, interrupt:true});
+$("vTest").onclick = () => say(SAMPLE[S.vStyle] || SAMPLE.standard, {force:true, interrupt:true});
+if (synth){ pickVoice(); fillVoiceForm(); synth.onvoiceschanged = () => { pickVoice(); fillVoiceForm(); }; }
+else { $("vTest").disabled = true; $("vVoice").innerHTML = `<option>此瀏覽器不支援語音</option>`; }
+$("fSim").onchange = e => { S.sim = e.target.checked; store.set("hb_settings", S); toast(S.sim ? "模擬行駛已開啟：位置會自己移動" : "已關閉模擬，改用真實 GPS"); };
+
+/* ---------- 提示 ---------- */
+let toastTimer;
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.hidden=false; clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.hidden=true, 3500); }
+
+/* ---------- 啟動 ---------- */
+fillForm(); setVoiceBtn(); renderFavs();
+if (T.state==="ended") { T = emptyTrip(); store.del("hb_trip"); }
+if (T.state==="running") keepAwake(true);
+startGps();
+render();
+})();
+</script>
+</body>
+</html>
